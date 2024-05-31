@@ -1,0 +1,187 @@
+version: "3"
+
+env:
+  SELENIUM_HUB_HOST: 127.0.0.1
+  SELENIUM_HUB_PORT: 4444
+  PYTEST_BASE_URL: http://localhost:8866
+  PYTEST_M: ""
+  PYTEST_K: ""
+
+tasks:
+  # ----------------------------------------------------------------------------
+  # Python
+
+  build:
+    dir: python
+    cmds:
+      - hatch build
+
+  check:
+    dir: python
+    ignore_error: true
+    cmds:
+      - isort . --check-only --diff
+      - black . --check
+      - ruff check jupyter_flex
+      - flake8
+
+  fmt:
+    dir: python
+    ignore_error: true
+    cmds:
+      - isort .
+      - black .
+      - ruff check --fix jupyter_flex
+
+  lockfiles:
+    dir: python
+    cmds:
+      - pip-compile -q --resolver=backtracking -o requirements/pyproject.txt pyproject.toml --extra=test
+      - pip-compile -q --resolver=backtracking -o requirements/pyproject-docs.txt pyproject.toml --extra=test --extra=docs
+      - pip-compile -q --resolver=backtracking -o requirements/linting.txt requirements/linting.in
+      - pip-compile -q --resolver=backtracking -o requirements/examples.txt requirements/examples.in
+
+  # Convert one notebook using nbconvert
+  nbconvert-example:
+    cmds:
+      - jupyter-nbconvert examples/layouts/customize/classes-colors.ipynb --to=flex --output-dir docs/examples/layouts/customize --execute
+      # --ExecutePreprocessor.store_widget_state=True
+      # --ExecutePreprocessor.allow_errors=True
+
+  # Serve examples using voila
+  voila-examples:
+    dir: examples
+    cmds:
+      - voila --template flex --VoilaConfiguration.file_whitelist '.*'
+
+  # Download 3rd-party assets
+  download-assets:
+    cmds:
+      - curl -o python/share/jupyter/nbconvert/templates/flex/static/require.min.js https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js
+
+  download-testdata:
+    dir: python
+    cmds:
+      - bokeh sampledata
+
+  # ----------------------------------------------------------------------------
+  # Testing
+
+  pytest:
+    dir: python
+    cmds:
+      - pytest -k "$PYTEST_K" -m "$PYTEST_M" --splinter-webdriver remote --splinter-remote-url $SELENIUM_HUB_HOST --html=test-results/report.html --self-contained-html
+
+  pytest-all:
+    dir: python
+    cmds:
+      - pytest --splinter-webdriver remote --splinter-remote-url $SELENIUM_HUB_HOST --html=test-results/report.html --self-contained-html
+
+  pytest-report:
+    dir: python
+    cmds:
+      - coverage xml
+      - coverage html
+
+  selenium-server:
+    cmds:
+      - selenium-server standalone --port $SELENIUM_HUB_PORT --host 0.0.0.0
+
+  selenium-docker:
+    cmds:
+      - docker-compose up
+
+  # ----------------------------------------------------------------------------
+  # Docs
+
+  docs:
+    cmds:
+      - task: docs-examples-html
+      - mkdocs build
+      - task: docs-example-exec-nbs
+
+  docs-serve:
+    cmds:
+      - mkdocs serve
+
+  # Convert examples to HTML dashboards and saves them into the docs source directory
+  docs-examples-html:
+    dir: examples
+    cmds:
+      - rm -rf ../docs/examples;
+      - jupyter-nbconvert *.ipynb 						   --output-dir=../docs/examples --to=flex --execute --ExecutePreprocessor.store_widget_state=True --ExecutePreprocessor.allow_errors=True
+      - jupyter-nbconvert docs/*.ipynb	 				  --output-dir=../docs/examples --to=flex --execute --ExecutePreprocessor.store_widget_state=True
+      - jupyter-nbconvert layouts/*.ipynb 				--output-dir=../docs/examples --to=flex --execute --ExecutePreprocessor.store_widget_state=True
+      - jupyter-nbconvert layouts/customize/*.ipynb 	--output-dir=../docs/examples --to=flex --execute --ExecutePreprocessor.store_widget_state=True
+      - jupyter-nbconvert plots/*.ipynb 				    --output-dir=../docs/examples --to=flex --execute --ExecutePreprocessor.store_widget_state=True
+      - jupyter-nbconvert widgets/*.ipynb 				  --output-dir=../docs/examples --to=flex --execute --ExecutePreprocessor.store_widget_state=True
+      # - jupyter-nbconvert illusionist/*.ipynb 			--output-dir=../docs/examples/illusionist --to=flex-illusionist --execute --ExecutePreprocessor.store_widget_state=True
+
+  # Execute examples notebooks and saves them into the docs output directory
+  docs-example-exec-nbs:
+    dir: examples
+    cmds:
+      - rm -rf ../site/examples/notebooks
+      - jupyter-nbconvert *.ipynb 		      		  	--output-dir=$../site/examples/notebooks --to=notebook --execute --ExecutePreprocessor.store_widget_state=True --ExecutePreprocessor.allow_errors=True
+      - jupyter-nbconvert docs/*.ipynb 				--output-dir=$../site/examples/notebooks --to=notebook --execute --ExecutePreprocessor.store_widget_state=True
+      - jupyter-nbconvert layouts/*.ipynb 				--output-dir=$../site/examples/notebooks --to=notebook --execute --ExecutePreprocessor.store_widget_state=True
+      - jupyter-nbconvert layouts/customize/*.ipynb	--output-dir=$../site/examples/notebooks --to=notebook --execute --ExecutePreprocessor.store_widget_state=True
+      - jupyter-nbconvert plots/*.ipynb 				--output-dir=$../site/examples/notebooks --to=notebook --execute --ExecutePreprocessor.store_widget_state=True
+      - jupyter-nbconvert widgets/*.ipynb 				--output-dir=$../site/examples/notebooks --to=notebook --execute --ExecutePreprocessor.store_widget_state=True
+      # - jupyter-nbconvert illusionist/*.ipynb 			--output-dir=$../site/examples/notebooks/illusionist --to=illusionist-nb --execute --ExecutePreprocessor.store_widget_state=True
+
+  cleanall:
+    cmds:
+      - task: py-clean
+      - task: js-clean
+      - rm -rf site
+      - rm -rf docs/examples
+
+  py-clean:
+    dir: python
+    cmds:
+      - rm -rf .pytest_cache dist htmlcov test-results .ruff_cache
+      - rm -f .coverage coverage.xml
+      - find . -type f -name '*.py[co]' -delete
+      - find . -type d -name __pycache__ -exec rm -rf {} +
+      - find . -type d -name .ipynb_checkpoints -exec rm -rf {} +
+
+  # ----------------------------------------------------------------------------
+  # Javascript
+
+  js-build:
+    dir: js
+    cmds:
+      - npm run build
+
+  js-dev:
+    dir: js
+    cmds:
+      - npm run dev
+
+  js-install:
+    dir: js
+    cmds:
+      - npm install
+
+  js-clean:
+    cmds:
+      - task: js-clean-1
+      - task: js-clean-2
+
+  js-clean-1:
+    dir: js
+    cmds:
+      - npm run clean
+
+  js-clean-2:
+    dir: python
+    cmds:
+      - cd share/jupyter/nbconvert/templates/flex/static
+      - cd share/jupyter/nbconvert/templates/flex/static; rm -rf *.js* *.css* *.eot* *.woff* *.svg *.ttf *.txt
+
+  js-reset:
+    dir: js
+    cmds:
+      - task: js-clean
+      - rm -rf node_modules
